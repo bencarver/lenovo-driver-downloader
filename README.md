@@ -69,7 +69,7 @@ python lenovo_driver_downloader.py YOUR_SERIAL_NUMBER -w 8  # Use 8 parallel dow
 The serial number can typically be found:
 - On a sticker on the bottom or back of the laptop
 - In BIOS/UEFI settings
-- Using the command: `wmic bios get serialnumber` (Windows)
+- Using PowerShell: `Get-CimInstance win32_bios | select SerialNumber`
 - Using Lenovo Vantage software
 
 ## Output
