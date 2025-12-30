@@ -349,6 +349,35 @@ class LenovoDriverDownloader:
         
         return sccm_packages
     
+    def find_extracted_files(self) -> list:
+        """
+        Search common extraction locations for extracted driver files.
+        
+        Returns:
+            List of paths where .inf files were found
+        """
+        common_locations = [
+            Path(r"C:\SCCM"),
+            Path(r"C:\Drivers\SCCM"),
+            Path(r"C:\Drivers"),
+            Path.home() / "Drivers" / "SCCM",
+            Path.home() / "Drivers",
+        ]
+        
+        found_locations = []
+        for location in common_locations:
+            if location.exists():
+                # Look for .inf files (driver files)
+                inf_files = list(location.rglob("*.inf"))
+                if inf_files:
+                    found_locations.append({
+                        'path': location,
+                        'inf_count': len(inf_files),
+                        'sample_files': [f.name for f in inf_files[:5]]  # First 5 file names
+                    })
+        
+        return found_locations
+    
     def extract_sccm_package(self, exe_path: Path, extract_dir: Path) -> bool:
         """
         Extract an SCCM package .exe file.
@@ -359,8 +388,6 @@ class LenovoDriverDownloader:
         Returns:
             True if extraction succeeded, False otherwise
         """
-        extract_dir.mkdir(parents=True, exist_ok=True)
-        
         # On Windows, use the exe's built-in extraction (most reliable)
         if sys.platform == 'win32':
             return self._extract_sccm_windows(exe_path, extract_dir)
@@ -370,33 +397,58 @@ class LenovoDriverDownloader:
     def _extract_sccm_windows(self, exe_path: Path, extract_dir: Path) -> bool:
         """Extract SCCM package on Windows using native extraction."""
         try:
-            print(f"   📦 Running self-extractor...")
-            # Lenovo packages support /extract or /VERYSILENT /DIR=
-            result = subprocess.run(
-                [str(exe_path), '/VERYSILENT', f'/DIR={extract_dir}'],
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
+            print(f"   📦 Running self-extractor in background...")
+            print(f"   📂 Using extractor's default location")
             
-            if result.returncode == 0 or any(extract_dir.iterdir()):
-                print(f"   ✅ Extracted to {extract_dir.name}/")
-                return True
+            # Create subprocess startup info to hide window
+            startup_info = None
+            creation_flags = 0
+            if sys.platform == 'win32':
+                startup_info = subprocess.STARTUPINFO()
+                startup_info.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+                startup_info.wShowWindow = subprocess.SW_HIDE
+                # CREATE_NO_WINDOW flag to prevent window creation
+                creation_flags = subprocess.CREATE_NO_WINDOW
             
-            # Try alternate extraction flag
-            result = subprocess.run(
-                [str(exe_path), f'/extract:{extract_dir}'],
-                capture_output=True,
-                text=True,
-                timeout=600
-            )
+            # Use the Lenovo SCCM standard extraction method without /DIR
+            cmd = [str(exe_path.absolute()), '/SILENT', '/SUPPRESSMSGBOXES']
             
-            if result.returncode == 0 or any(extract_dir.iterdir()):
-                print(f"   ✅ Extracted to {extract_dir.name}/")
-                return True
+            try:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,
+                    startupinfo=startup_info,
+                    creationflags=creation_flags
+                )
                 
-            print(f"   ⚠️  Self-extraction failed")
-            return False
+                # Check return code to see if extraction succeeded
+                if result.returncode == 0:
+                    # Wait a moment for files to be written
+                    time.sleep(2)
+                    
+                    # Search for extracted files
+                    found_locations = self.find_extracted_files()
+                    if found_locations:
+                        print(f"   ✅ Extraction completed successfully")
+                        for loc in found_locations:
+                            print(f"   📂 Found {loc['inf_count']} driver files in: {loc['path']}")
+                    else:
+                        print(f"   ✅ Extraction completed (return code: 0)")
+                        print(f"   ⚠️  Could not find extracted files in common locations")
+                    return True
+                else:
+                    print(f"   ⚠️  Extraction failed (return code: {result.returncode})")
+                    if result.stderr:
+                        print(f"   Error: {result.stderr[:200]}")
+                    print(f"   💡 You may need to extract manually: {exe_path.name} /SILENT /SUPPRESSMSGBOXES")
+                    return False
+                
+            except subprocess.TimeoutExpired:
+                print(f"   ⚠️  Extraction timed out")
+                print(f"   💡 You may need to extract manually: {exe_path.name} /SILENT /SUPPRESSMSGBOXES")
+                return False
             
         except Exception as e:
             print(f"   ⚠️  Extraction error: {e}")
@@ -637,26 +689,31 @@ class LenovoDriverDownloader:
             print(f"\n📦 Extracting SCCM packages...")
             for filepath in downloaded_files:
                 if filepath.suffix.lower() == '.exe':
-                    extract_dir = sccm_dir / filepath.stem
-                    if extract_dir.exists() and any(extract_dir.iterdir()):
-                        print(f"\n⏭️  {filepath.stem}/ already extracted, skipping")
-                        continue
                     print(f"\n🔧 Extracting {filepath.name}...")
-                    self.extract_sccm_package(filepath, extract_dir)
+                    # Extract to extractor's default location (no directory specified)
+                    self.extract_sccm_package(filepath, Path("."))
         
         # Summary
         print(f"\n✨ SCCM package download complete!")
-        print(f"   📂 Location: {sccm_dir.absolute()}")
+        print(f"   📂 Downloaded files location: {sccm_dir.absolute()}")
         
         if extract:
-            # List extracted folders with .inf counts
-            print(f"\n📁 Extracted driver folders:")
-            for filepath in downloaded_files:
-                if filepath.suffix.lower() == '.exe':
-                    extract_dir = sccm_dir / filepath.stem
-                    if extract_dir.exists():
-                        inf_count = len(list(extract_dir.rglob('*.inf')))
-                        print(f"   • {extract_dir.name}/  ({inf_count} .inf driver files)")
+            # Search for extracted files and display locations
+            print(f"\n📁 Searching for extracted driver files...")
+            found_locations = self.find_extracted_files()
+            
+            if found_locations:
+                print(f"\n✅ Found extracted driver files in the following locations:")
+                for loc in found_locations:
+                    print(f"   • {loc['path']}")
+                    print(f"     └─ {loc['inf_count']} driver (.inf) files found")
+            else:
+                print(f"\n⚠️  Could not find extracted files in common locations:")
+                print(f"   Checked: C:\\SCCM")
+                print(f"   Checked: C:\\Drivers\\SCCM")
+                print(f"   Checked: C:\\Drivers")
+                print(f"   Checked: {Path.home() / 'Drivers' / 'SCCM'}")
+                print(f"   Checked: {Path.home() / 'Drivers'}")
         
         print(f"\n💡 Usage for OOBE/Deployment:")
         print(f"   • USB Install: pnputil /add-driver <path>\\*.inf /subdirs")
