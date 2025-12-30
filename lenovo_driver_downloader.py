@@ -513,12 +513,14 @@ class LenovoDriverDownloader:
                 except Exception:
                     pass
     
-    def download_sccm_packages(self, extract: bool = True):
+    def download_sccm_packages(self, extract: bool = True, selected_indices: list = None):
         """
         Download SCCM driver packages only.
         
         Args:
             extract: If True, automatically extract the packages after download
+            selected_indices: Optional list of package indices to download (0-based).
+                            If None, user will be prompted to select packages.
         """
         sccm_packages = self.get_sccm_packages()
         
@@ -528,10 +530,65 @@ class LenovoDriverDownloader:
             return
         
         print(f"\n📦 Found {len(sccm_packages)} SCCM package(s):")
-        for pkg in sccm_packages:
-            print(f"   • {pkg['title']}")
+        for idx, pkg in enumerate(sccm_packages):
+            print(f"   [{idx + 1}] {pkg['title']}")
             for f in pkg['files']:
-                print(f"     - {f['url'].split('/')[-1]} ({f['size']})")
+                filename = f['url'].split('/')[-1].split('?')[0]
+                size_str = f['size'] if f['size'] else "Unknown size"
+                print(f"       - {filename} ({size_str})")
+        
+        # Let user select packages if not specified
+        if selected_indices is None:
+            print(f"\n🔢 Select packages to download:")
+            print(f"   • Enter package numbers separated by commas (e.g., 1,3,5)")
+            print(f"   • Enter 'all' to download all packages")
+            print(f"   • Enter 'none' to cancel")
+            
+            while True:
+                try:
+                    selection = input("\n   Your selection: ").strip().lower()
+                    
+                    if selection == 'none':
+                        print("❌ Download cancelled")
+                        return
+                    elif selection == 'all' or selection == '':
+                        selected_indices = list(range(len(sccm_packages)))
+                        break
+                    else:
+                        # Parse comma-separated numbers
+                        indices = []
+                        for num_str in selection.split(','):
+                            num_str = num_str.strip()
+                            if num_str:
+                                num = int(num_str)
+                                if 1 <= num <= len(sccm_packages):
+                                    indices.append(num - 1)  # Convert to 0-based
+                                else:
+                                    print(f"   ⚠️  Invalid number: {num}. Must be between 1 and {len(sccm_packages)}")
+                                    raise ValueError()
+                        
+                        if indices:
+                            selected_indices = sorted(set(indices))  # Remove duplicates and sort
+                            break
+                        else:
+                            print("   ⚠️  No valid packages selected. Try again.")
+                            
+                except ValueError:
+                    print("   ⚠️  Invalid input. Please enter numbers separated by commas, 'all', or 'none'.")
+                except KeyboardInterrupt:
+                    print("\n❌ Download cancelled")
+                    return
+        
+        # Filter to selected packages
+        selected_packages = [sccm_packages[i] for i in selected_indices]
+        
+        if not selected_packages:
+            print("❌ No packages selected")
+            return
+        
+        print(f"\n✅ Selected {len(selected_packages)} package(s) to download:")
+        for idx in selected_indices:
+            print(f"   • {sccm_packages[idx]['title']}")
         
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -539,9 +596,9 @@ class LenovoDriverDownloader:
         sccm_dir.mkdir(exist_ok=True)
         print(f"\n📂 Saving to: {sccm_dir.absolute()}")
         
-        # Download each package
+        # Download each selected package
         downloaded_files = []
-        for pkg in sccm_packages:
+        for pkg in selected_packages:
             for file_info in pkg['files']:
                 url = file_info['url']
                 filename = unquote(url.split('/')[-1].split('?')[0])
@@ -617,7 +674,8 @@ Examples:
   %(prog)s PF1234AB -c BIOS Audio        # Download only BIOS and Audio drivers
   %(prog)s PF1234AB --list               # List available categories
   %(prog)s PF1234AB -w 8                 # Use 8 parallel downloads
-  %(prog)s PF1234AB --sccm               # Download & extract SCCM driver packs
+  %(prog)s PF1234AB --sccm               # Download & extract SCCM driver packs (interactive selection)
+  %(prog)s PF1234AB --sccm --sccm-packages 1 3 5  # Download specific SCCM packages by number
   %(prog)s PF1234AB --sccm --no-extract  # Download SCCM packs without extracting
         """
     )
@@ -659,6 +717,12 @@ Examples:
         help="Download only SCCM driver packs (contains .inf files for deployment/OOBE)"
     )
     parser.add_argument(
+        "--sccm-packages",
+        nargs="+",
+        type=int,
+        help="Select specific SCCM packages by number (e.g., --sccm-packages 1 3 5). Use with --sccm. If not specified, interactive selection will be shown."
+    )
+    parser.add_argument(
         "--no-extract",
         action="store_true",
         help="Don't auto-extract SCCM packages (use with --sccm)"
@@ -684,7 +748,11 @@ Examples:
         elif args.list:
             downloader.list_categories()
         elif args.sccm:
-            downloader.download_sccm_packages(extract=not args.no_extract)
+            # Convert 1-based indices from command line to 0-based
+            selected_indices = None
+            if args.sccm_packages:
+                selected_indices = [idx - 1 for idx in args.sccm_packages]
+            downloader.download_sccm_packages(extract=not args.no_extract, selected_indices=selected_indices)
         else:
             downloader.download_all_drivers(categories=args.categories)
             
