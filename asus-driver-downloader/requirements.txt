@@ -1,0 +1,6 @@
+requests>=2.28.0
+tqdm>=4.64.0
+# Optional but recommended: pure-Python 7-Zip fallback used to unpack the
+# driver payload embedded in ASUS "Business Intelligence" installer packages
+# when system 7-Zip isn't available.
+py7zr>=0.20.0
